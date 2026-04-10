@@ -78,6 +78,11 @@ export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
     throw new Error("Error reading file data");
   }
 
+  const bufer = Buffer.from(fileData);
+  const imageBase64 = bufer.toString("base64");
+  const dataUrl = `data:${mediaType};${imageBase64},<data>`;
+
+
   videoThumbnails.set(videoId, {
     data: fileData,
     mediaType,
@@ -89,3 +94,4 @@ export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
 
   return respondWithJSON(200, video);
 }
+//
