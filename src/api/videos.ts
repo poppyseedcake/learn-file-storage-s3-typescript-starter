@@ -1,13 +1,17 @@
-import { respondWithJSON } from "./json";
+import { rm } from "fs/promises";
+import path from "path";
 import { getBearerToken, validateJWT } from "../auth";
-import { BadRequestError, NotFoundError, UserForbiddenError } from "./errors";
 import { getVideo, updateVideo } from "../db/videos";
-import { getAssetDiskPath, getAssetURLs3, mediaTypeToExt } from "./assets";
-import { randomBytes } from "node:crypto";
+import { respondWithJSON } from "./json";
+import { uploadVideoToS3 } from "../s3";
+import { BadRequestError, NotFoundError, UserForbiddenError } from "./errors";
+
 import { type ApiConfig } from "../config";
-import { type S3File, type BunRequest } from "bun";
+import type { BunRequest } from "bun";
 
 export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
+  const MAX_UPLOAD_SIZE = 1 << 30;
+
   const { videoId } = req.params as { videoId?: string };
   if (!videoId) {
     throw new BadRequestError("Invalid video ID");
@@ -29,36 +33,24 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
   if (!(file instanceof File)) {
     throw new BadRequestError("Video file missing");
   }
-
-  const MAX_UPLOAD_SIZE = 1 << 30;
   if (file.size > MAX_UPLOAD_SIZE) {
-    throw new BadRequestError(
-      `Video file exceeds the maximum allowed size of 1GB`,
-    );
+    throw new BadRequestError("File exceeds size limit (1GB)");
+  }
+  if (file.type !== "video/mp4") {
+    throw new BadRequestError("Invalid file type, only MP4 is allowed");
   }
 
-  const mediaType = file.type;
-  if (mediaType !== "video/mp4") {
-    throw new BadRequestError("Invalid file type. Only MP4 allowed.");
-  }
-  const ext = mediaTypeToExt(mediaType);
-  const randomName = randomBytes(32).toString("base64url");
-  const filename = `${randomName}${ext}`;
+  const tempFilePath = path.join("/tmp", `${videoId}.mp4`);
+  await Bun.write(tempFilePath, file);
 
-  const assetDiskPath = getAssetDiskPath(cfg, filename);
-  await Bun.write(assetDiskPath, file);
+  let key = `${videoId}.mp4`;
+  await uploadVideoToS3(cfg, key, tempFilePath, "video/mp4");
 
-  const client = cfg.s3Client;
-  const s3file: S3File = client.file(filename);
-  await s3file.write(Bun.file(assetDiskPath), {
-  type: mediaType,
-});
-
-  const urlPath = getAssetURLs3(cfg, filename);
-  video.videoURL = urlPath;
+  const videoURL = `https://${cfg.s3Bucket}.s3.${cfg.s3Region}.amazonaws.com/${key}`;
+  video.videoURL = videoURL;
   updateVideo(cfg.db, video);
 
+  await Promise.all([rm(tempFilePath, { force: true })]);
 
-
-  return respondWithJSON(200, null);
+  return respondWithJSON(200, video);
 }
