@@ -5,6 +5,7 @@ import { getVideo, updateVideo } from "../db/videos";
 import type { ApiConfig } from "../config";
 import type { BunRequest } from "bun";
 import { BadRequestError, NotFoundError, UserForbiddenError } from "./errors";
+import { randomBytes } from "node:crypto";
 
 export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
   const { videoId } = req.params as { videoId?: string };
@@ -38,12 +39,13 @@ export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
   }
 
   const mediaType = file.type;
-  if (!mediaType) {
-    throw new BadRequestError("Missing Content-Type for thumbnail");
+  if (mediaType !== "image/jpeg" && mediaType !== "image/png") {
+    throw new BadRequestError("Invalid file type. Only JPEG or PNG allowed.");
   }
 
   const ext = mediaTypeToExt(mediaType);
-  const filename = `${videoId}${ext}`;
+  const randomName = randomBytes(32).toString("base64url");
+  const filename = `${randomName}${ext}`;
 
   const assetDiskPath = getAssetDiskPath(cfg, filename);
   await Bun.write(assetDiskPath, file);
