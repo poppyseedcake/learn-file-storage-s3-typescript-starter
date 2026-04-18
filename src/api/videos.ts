@@ -44,18 +44,19 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
   await Bun.write(tempFilePath, file);
 
   const aspectRatio = await getVideoAspectRatio(tempFilePath);
+  const processedFilePath = await processVideoForFastStart(tempFilePath);
 
-  const processedVideo = await processVideoForFastStart(tempFilePath);
-
-  let key = `${aspectRatio}/${videoId}.mp4`;
-  await uploadVideoToS3(cfg, key, processedVideo, "video/mp4");
+  const key = `${aspectRatio}/${videoId}.mp4`;
+  await uploadVideoToS3(cfg, key, processedFilePath, "video/mp4");
 
   const videoURL = `https://${cfg.s3Bucket}.s3.${cfg.s3Region}.amazonaws.com/${key}`;
   video.videoURL = videoURL;
   updateVideo(cfg.db, video);
 
-  await Promise.all([rm(tempFilePath, { force: true })]);
-
+  await Promise.all([
+    rm(tempFilePath, { force: true }),
+    rm(`${tempFilePath}.processed.mp4`, { force: true }),
+  ]);
   return respondWithJSON(200, video);
 }
 
@@ -102,8 +103,9 @@ export async function getVideoAspectRatio(filePath: string) {
       : "other";
 }
 
-export async function processVideoForFastStart(inputFilePath: string): Promise<string> {
-  const outputFilePath = `${inputFilePath}.processed`;
+export async function processVideoForFastStart(inputFilePath: string) {
+  const processedFilePath = `${inputFilePath}.processed.mp4`;
+
   const process = Bun.spawn(
     [
       "ffmpeg",
@@ -117,22 +119,17 @@ export async function processVideoForFastStart(inputFilePath: string): Promise<s
       "copy",
       "-f",
       "mp4",
-      outputFilePath,
+      processedFilePath,
     ],
-    {
-      stdout: "pipe",
-      stderr: "pipe",
-    },
+    { stderr: "pipe" },
   );
 
-  const outputText = await new Response(process.stdout).text();
   const errorText = await new Response(process.stderr).text();
-
   const exitCode = await process.exited;
 
   if (exitCode !== 0) {
-    throw new Error(`ffmpeg error: ${errorText}`);
+    throw new Error(`FFmpeg error: ${errorText}`);
   }
 
-  return outputFilePath;
+  return processedFilePath;
 }
